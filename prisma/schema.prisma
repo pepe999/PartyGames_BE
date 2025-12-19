@@ -1,0 +1,204 @@
+// Databázové schéma pro aplikaci společenských her online
+// Generator: Prisma Client
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// UŽIVATELÉ A AUTENTIZACE
+// ============================================
+
+model User {
+  id        String   @id @default(uuid())
+  googleId  String   @unique
+  email     String   @unique
+  name      String
+  avatar    String?  // URL Google avataru
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relace
+  gameHistories  GameHistory[]
+  favoriteGames  FavoriteGame[]
+  userContent    GameContent[]   @relation("UserGeneratedContent")
+  hostedRooms    GameRoom[]      @relation("RoomHost")
+  playerSessions RoomPlayer[]
+
+  @@map("users")
+}
+
+// ============================================
+// HRY A OBSAH
+// ============================================
+
+model Game {
+  id            String   @id @default(uuid())
+  name          String
+  slug          String   @unique
+  description   String
+  rules         String   // Markdown formátovaná pravidla
+  type          GameType
+  category      String[] // Pole kategorií: ["rodinná", "kvíz", "párty"]
+  minPlayers    Int
+  maxPlayers    Int
+  difficulty    Difficulty
+  estimatedTime Int      // V minutách
+  imageUrl      String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relace
+  gameContent   GameContent[]
+  favoriteBy    FavoriteGame[]
+  gameRooms     GameRoom[]
+  gameHistories GameHistory[]
+
+  @@map("games")
+}
+
+model GameContent {
+  id                String     @id @default(uuid())
+  gameId            String
+  type              ContentType
+  content           Json       // JSONB - flexibilní struktura podle typu
+  category          String?
+  difficulty        Difficulty @default(MEDIUM)
+  isUserGenerated   Boolean    @default(false)
+  userId            String?    // NULL pro admin obsah
+  status            ContentStatus @default(APPROVED)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  // Relace
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user User? @relation("UserGeneratedContent", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([gameId])
+  @@index([category])
+  @@index([type])
+  @@map("game_content")
+}
+
+// ============================================
+// HERNÍ MÍSTNOSTI (MULTIPLAYER)
+// ============================================
+
+model GameRoom {
+  id         String     @id @default(uuid())
+  roomCode   String     @unique // 8 znaků, např. ABCD-1234
+  gameId     String
+  hostId     String?    // NULL pro anonymní hosta
+  status     RoomStatus @default(WAITING)
+  settings   Json       // JSONB - nastavení hry (kola, čas, kategorie)
+  createdAt  DateTime   @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  // Relace
+  game    Game         @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  host    User?        @relation("RoomHost", fields: [hostId], references: [id], onDelete: SetNull)
+  players RoomPlayer[]
+
+  @@index([roomCode])
+  @@index([status])
+  @@map("game_rooms")
+}
+
+model RoomPlayer {
+  id          String   @id @default(uuid())
+  roomId      String
+  userId      String?  // NULL pro anonymní hráče
+  playerName  String
+  team        TeamType @default(SPECTATOR)
+  isConnected Boolean  @default(true)
+  joinedAt    DateTime @default(now())
+
+  // Relace
+  room GameRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([roomId])
+  @@map("room_players")
+}
+
+// ============================================
+// HISTORIE A OBLÍBENÉ
+// ============================================
+
+model GameHistory {
+  id       String   @id @default(uuid())
+  userId   String
+  gameId   String
+  roomId   String?  // NULL pro statické hry
+  result   Json     // JSONB - skóre týmů, statistiky, vítěz
+  playedAt DateTime @default(now())
+
+  // Relace
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([gameId])
+  @@index([playedAt])
+  @@map("game_histories")
+}
+
+model FavoriteGame {
+  userId  String
+  gameId  String
+  addedAt DateTime @default(now())
+
+  // Relace
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@id([userId, gameId])
+  @@map("favorite_games")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum GameType {
+  STATIC  // Statické hry (zobrazení zadání)
+  ONLINE  // Online multiplayer hry
+}
+
+enum ContentType {
+  QUESTION      // Otázka s možnostmi odpovědí
+  ACTIVITY      // Activity slovo/fráze
+  PROVERB       // Přísloví s obrázkem
+  EMOJI_MOVIE   // Film reprezentovaný emoji
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum ContentStatus {
+  PENDING   // Čeká na schválení
+  APPROVED  // Schváleno
+  REJECTED  // Zamítnuto
+}
+
+enum RoomStatus {
+  WAITING   // Čeká na hráče
+  PLAYING   // Hra probíhá
+  FINISHED  // Hra skončila
+}
+
+enum TeamType {
+  A
+  B
+  SPECTATOR
+}
