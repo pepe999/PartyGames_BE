@@ -13,52 +13,385 @@ import { optionalAuth } from '../middleware/auth';
 const router = Router();
 
 /**
- * GET /api/rooms
- * Získá seznam aktivních místností (pro lobby)
+ * @swagger
+ * /api/rooms:
+ *   get:
+ *     tags: [Rooms]
+ *     summary: Seznam aktivních místností
+ *     description: Získá seznam všech aktivních herních místností (pro lobby)
+ *     responses:
+ *       200:
+ *         description: Seznam místností
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     rooms:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/GameRoom'
+ *                     total:
+ *                       type: integer
+ *   post:
+ *     tags: [Rooms]
+ *     summary: Vytvoření nové místnosti
+ *     description: Vytvoří novou herní místnost (může být anonymní nebo s hostitelem)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - gameId
+ *               - settings
+ *             properties:
+ *               gameId:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID hry
+ *               settings:
+ *                 type: object
+ *                 properties:
+ *                   rounds:
+ *                     type: integer
+ *                     description: Počet kol
+ *                   timePerQuestion:
+ *                     type: integer
+ *                     description: Čas na otázku v sekundách
+ *                   categories:
+ *                     type: array
+ *                     items:
+ *                       type: string
+ *                     description: Povolené kategorie
+ *                   difficulty:
+ *                     type: string
+ *                     enum: [EASY, MEDIUM, HARD]
+ *                     description: Obtížnost
+ *                   teamMode:
+ *                     type: boolean
+ *                     description: Týmový režim
+ *                   maxPlayers:
+ *                     type: integer
+ *                     description: Maximální počet hráčů
+ *     responses:
+ *       201:
+ *         description: Místnost vytvořena
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     room:
+ *                       $ref: '#/components/schemas/GameRoom'
+ *       400:
+ *         description: Validační chyba
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Hra nebyla nalezena
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/', getActiveRooms);
-
-/**
- * POST /api/rooms
- * Vytvoří novou herní místnost
- * Optional auth - může být anonymní nebo authenticated
- * Body: { gameId, settings }
- */
 router.post('/', optionalAuth, createGameRoom);
 
 /**
- * GET /api/rooms/:roomCode
- * Získá detail místnosti
+ * @swagger
+ * /api/rooms/{roomCode}:
+ *   get:
+ *     tags: [Rooms]
+ *     summary: Detail místnosti
+ *     description: Získá detailní informace o herní místnosti včetně hráčů
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[A-Z0-9]{4}-[A-Z0-9]{4}$'
+ *         description: Kód místnosti (např. ABCD-1234)
+ *     responses:
+ *       200:
+ *         description: Detail místnosti
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     room:
+ *                       $ref: '#/components/schemas/GameRoom'
+ *       404:
+ *         description: Místnost nebyla nalezena
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/:roomCode', getRoom);
 
 /**
- * POST /api/rooms/:roomCode/join
- * Připojí hráče do místnosti
- * Optional auth - může být anonymní nebo authenticated
- * Body: { playerName, team? }
+ * @swagger
+ * /api/rooms/{roomCode}/join:
+ *   post:
+ *     tags: [Rooms]
+ *     summary: Připojení do místnosti
+ *     description: Připojí hráče do herní místnosti (anonymní nebo přihlášený)
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[A-Z0-9]{4}-[A-Z0-9]{4}$'
+ *         description: Kód místnosti
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - playerName
+ *             properties:
+ *               playerName:
+ *                 type: string
+ *                 description: Jméno hráče
+ *               team:
+ *                 type: string
+ *                 enum: [A, B, SPECTATOR]
+ *                 default: SPECTATOR
+ *                 description: Tým hráče
+ *     responses:
+ *       200:
+ *         description: Hráč úspěšně připojen
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     player:
+ *                       $ref: '#/components/schemas/RoomPlayer'
+ *       400:
+ *         description: Místnost je plná nebo hra už běží
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Místnost nebyla nalezena
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.post('/:roomCode/join', optionalAuth, joinGameRoom);
 
 /**
- * PATCH /api/rooms/:roomCode/settings
- * Aktualizuje nastavení místnosti (pouze host)
- * Optional auth - ověří se, zda je user host
- * Body: { settings }
+ * @swagger
+ * /api/rooms/{roomCode}/settings:
+ *   patch:
+ *     tags: [Rooms]
+ *     summary: Aktualizace nastavení (pouze host)
+ *     description: Aktualizuje nastavení místnosti před startem hry
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Kód místnosti
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               settings:
+ *                 type: object
+ *                 properties:
+ *                   rounds:
+ *                     type: integer
+ *                   timePerQuestion:
+ *                     type: integer
+ *                   categories:
+ *                     type: array
+ *                     items:
+ *                       type: string
+ *                   difficulty:
+ *                     type: string
+ *                     enum: [EASY, MEDIUM, HARD]
+ *                   teamMode:
+ *                     type: boolean
+ *                   maxPlayers:
+ *                     type: integer
+ *     responses:
+ *       200:
+ *         description: Nastavení aktualizováno
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     room:
+ *                       $ref: '#/components/schemas/GameRoom'
+ *       403:
+ *         description: Pouze host může měnit nastavení
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Místnost nebyla nalezena
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.patch('/:roomCode/settings', optionalAuth, updateSettings);
 
 /**
- * POST /api/rooms/:roomCode/start
- * Spustí hru v místnosti (pouze host)
- * Optional auth - ověří se, zda je user host
+ * @swagger
+ * /api/rooms/{roomCode}/start:
+ *   post:
+ *     tags: [Rooms]
+ *     summary: Spuštění hry (pouze host)
+ *     description: Spustí hru v místnosti
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Kód místnosti
+ *     responses:
+ *       200:
+ *         description: Hra spuštěna
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     room:
+ *                       $ref: '#/components/schemas/GameRoom'
+ *       400:
+ *         description: Nedostatečný počet hráčů
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Pouze host může spustit hru
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Místnost nebyla nalezena
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.post('/:roomCode/start', optionalAuth, startGameInRoom);
 
 /**
- * POST /api/rooms/:roomCode/players/:playerId/team
- * Změní tým hráče
- * Body: { team }
+ * @swagger
+ * /api/rooms/{roomCode}/players/{playerId}/team:
+ *   post:
+ *     tags: [Rooms]
+ *     summary: Změna týmu hráče
+ *     description: Změní tým hráče v místnosti
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Kód místnosti
+ *       - in: path
+ *         name: playerId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: ID hráče
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - team
+ *             properties:
+ *               team:
+ *                 type: string
+ *                 enum: [A, B, SPECTATOR]
+ *                 description: Nový tým
+ *     responses:
+ *       200:
+ *         description: Tým změněn
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     player:
+ *                       $ref: '#/components/schemas/RoomPlayer'
+ *       400:
+ *         description: Hra už běží, nelze měnit tým
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Místnost nebo hráč nebyli nalezeni
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.post('/:roomCode/players/:playerId/team', changeTeam);
 

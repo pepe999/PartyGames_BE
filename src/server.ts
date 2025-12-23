@@ -3,11 +3,13 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { createServer } from 'http';
+import swaggerUi from 'swagger-ui-express';
 import { env } from './config/env';
 import { prisma } from './config/database';
 import { logger } from './utils/logger';
 import { errorHandler } from './middleware/errorHandler';
 import { initializeSocket } from './socket';
+import { swaggerSpec } from './config/swagger';
 
 // Import routes (budou vytvořeny agentem)
 import authRoutes from './routes/auth';
@@ -60,6 +62,22 @@ app.use('/api/auth', authLimiter);
 // ============================================
 // ROUTES
 // ============================================
+
+// Swagger UI
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'PartyGames API Docs',
+  })
+);
+
+// Swagger JSON
+app.get('/api-docs.json', (_req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpec);
+});
 
 // Health check
 app.get('/api/health', (_req, res) => {
