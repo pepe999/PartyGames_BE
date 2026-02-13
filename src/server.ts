@@ -15,6 +15,7 @@ import { swaggerSpec } from './config/swagger';
 import authRoutes from './routes/auth';
 import gamesRoutes from './routes/games';
 import roomsRoutes from './routes/rooms';
+import gameRoutes from './routes/game';
 
 const app: Application = express();
 const httpServer = createServer(app);
@@ -88,6 +89,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/games', gamesRoutes);
 app.use('/api/rooms', roomsRoutes);
+app.use('/api/game', gameRoutes);
 
 // 404 handler
 app.use((_req, res) => {

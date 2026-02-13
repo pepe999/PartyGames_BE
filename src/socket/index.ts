@@ -6,6 +6,9 @@ import { ServerToClientEvents, ClientToServerEvents } from '../types';
 import { handleRoomEvents } from './roomHandlers';
 import { handleGameEvents } from './gameHandlers';
 
+// Global Socket.io instance
+let ioInstance: Server | null = null;
+
 export function initializeSocket(httpServer: HttpServer): Server {
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: {
@@ -14,6 +17,9 @@ export function initializeSocket(httpServer: HttpServer): Server {
       credentials: true,
     },
   });
+
+  // Store global instance
+  ioInstance = io;
 
   io.on('connection', (socket: Socket) => {
     logger.info(`Socket connected: ${socket.id}`);
@@ -34,4 +40,11 @@ export function initializeSocket(httpServer: HttpServer): Server {
   logger.info('✅ WebSocket server initialized');
 
   return io;
+}
+
+/**
+ * Returns the global Socket.io instance
+ */
+export function getIO(): Server | null {
+  return ioInstance;
 }

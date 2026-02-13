@@ -207,3 +207,56 @@ export const handleGoogleLogin = async (credential: string): Promise<{ user: Use
 
   return { user, token };
 };
+
+/**
+ * DEV ONLY - Vytvoří testovacího uživatele
+ */
+export const handleDevLogin = async (
+  name: string,
+  avatar?: string
+): Promise<{ user: UserData; token: string }> => {
+  try {
+    // Vytvoř unikátní email pro testovacího uživatele
+    const email = `dev-${name.toLowerCase().replace(/\s+/g, '-')}@test.local`;
+    const googleId = `dev-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+    const user = await prisma.user.upsert({
+      where: {
+        email,
+      },
+      update: {
+        name,
+        avatar: avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`,
+        updatedAt: new Date(),
+      },
+      create: {
+        googleId,
+        email,
+        name,
+        avatar: avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatar: true,
+      },
+    });
+
+    logger.info(`Dev user created/updated: ${user.email}`);
+
+    const userData: UserData = {
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      avatar: user.avatar,
+    };
+
+    const token = generateJWT(userData);
+
+    return { user: userData, token };
+  } catch (error) {
+    logger.error('Error creating dev user:', error);
+    throw new AppError('Failed to create dev user', 500, 'DATABASE_ERROR');
+  }
+};

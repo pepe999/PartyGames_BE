@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../types';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { googleLoginSchema } from '../validators/schemas';
-import { handleGoogleLogin, getUserById } from '../services/authService';
+import { handleGoogleLogin, getUserById, handleDevLogin } from '../services/authService';
 import { logger } from '../utils/logger';
 
 /**
@@ -99,6 +99,40 @@ export const refreshToken = asyncHandler(async (req: AuthRequest, res: Response)
     success: true,
     data: {
       token: newToken,
+    },
+  });
+});
+
+/**
+ * POST /api/auth/dev-login
+ * DEV ONLY - Testovací přihlášení bez Google OAuth
+ */
+export const devLogin = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (process.env.NODE_ENV !== 'development') {
+    throw new AppError('This endpoint is only available in development', 403, 'FORBIDDEN');
+  }
+
+  const { name, avatar } = req.body;
+
+  if (!name || typeof name !== 'string') {
+    throw new AppError('Name is required', 400, 'INVALID_INPUT');
+  }
+
+  // Vytvoř nebo najdi testovacího uživatele
+  const { user, token } = await handleDevLogin(name, avatar);
+
+  logger.info(`Dev user logged in: ${user.email}`);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      user: {
+        id: user.userId,
+        email: user.email,
+        name: user.name,
+        avatar: user.avatar,
+      },
+      token,
     },
   });
 });

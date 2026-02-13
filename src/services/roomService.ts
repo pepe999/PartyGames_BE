@@ -2,6 +2,7 @@ import { prisma } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { logger } from '../utils/logger';
 import { TeamType } from '@prisma/client';
+import bcrypt from 'bcrypt';
 
 interface RoomSettings {
   rounds: number;
@@ -38,7 +39,10 @@ const generateRoomCode = (): string => {
 export const createRoom = async (
   gameId: string,
   settings: RoomSettings,
-  hostId?: string
+  hostId?: string,
+  isPrivate: boolean = true,
+  password?: string,
+  roomName?: string
 ) => {
   try {
     // Ověř, že hra existuje a je online
@@ -73,6 +77,13 @@ export const createRoom = async (
       throw new AppError('Failed to generate unique room code', 500, 'ROOM_CODE_GENERATION_FAILED');
     }
 
+    // Hashuj heslo pokud je zadáno
+    let passwordHash: string | null = null;
+    if (password && password.trim().length > 0) {
+      const SALT_ROUNDS = 10;
+      passwordHash = await bcrypt.hash(password.trim(), SALT_ROUNDS);
+    }
+
     // Vytvoř místnost
     const room = await prisma.gameRoom.create({
       data: {
@@ -81,12 +92,17 @@ export const createRoom = async (
         hostId,
         status: 'WAITING',
         settings: settings as any,
+        isPrivate,
+        passwordHash,
+        roomName: roomName?.trim() || null,
       },
       select: {
         id: true,
         roomCode: true,
         status: true,
         settings: true,
+        isPrivate: true,
+        roomName: true,
         createdAt: true,
         game: {
           select: {
@@ -101,9 +117,12 @@ export const createRoom = async (
       },
     });
 
-    logger.info(`Room created: ${room.roomCode} for game ${game.name}`);
+    logger.info(`Room created: ${room.roomCode} for game ${game.name} (private: ${isPrivate}, password: ${!!passwordHash})`);
 
-    return room;
+    return {
+      ...room,
+      hasPassword: !!passwordHash,
+    };
   } catch (error) {
     if (error instanceof AppError) {
       throw error;
@@ -154,6 +173,7 @@ export const getRoomByCode = async (roomCode: string) => {
             playerName: true,
             team: true,
             isConnected: true,
+            isReady: true,
             joinedAt: true,
             user: {
               select: {
@@ -191,7 +211,8 @@ export const joinRoom = async (
   roomCode: string,
   playerName: string,
   team: TeamType = 'SPECTATOR',
-  userId?: string
+  userId?: string,
+  password?: string
 ) => {
   try {
     // Získej místnost
@@ -201,6 +222,7 @@ export const joinRoom = async (
         id: true,
         status: true,
         settings: true,
+        passwordHash: true,
         game: {
           select: {
             maxPlayers: true,
@@ -220,6 +242,18 @@ export const joinRoom = async (
 
     if (!room) {
       throw new AppError('Room not found', 404, 'ROOM_NOT_FOUND');
+    }
+
+    // Ověř heslo pokud je nastaveno
+    if (room.passwordHash) {
+      if (!password || password.trim().length === 0) {
+        throw new AppError('Password required', 401, 'PASSWORD_REQUIRED');
+      }
+
+      const isPasswordValid = await bcrypt.compare(password.trim(), room.passwordHash);
+      if (!isPasswordValid) {
+        throw new AppError('Invalid password', 401, 'INVALID_PASSWORD');
+      }
     }
 
     if (room.status === 'FINISHED') {
@@ -244,12 +278,50 @@ export const joinRoom = async (
           userId,
           isConnected: true,
         },
+        select: {
+          id: true,
+          playerName: true,
+          team: true,
+          isConnected: true,
+          joinedAt: true,
+          isReady: true,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              avatar: true,
+            },
+          },
+        },
       });
 
       if (existingPlayer) {
         // Hráč už je v místnosti, vrať ho
-        return existingPlayer;
+        return { player: existingPlayer, isNew: false };
       }
+    }
+
+    // Automaticky rozděl hráče do týmů pokud team není specifikován
+    let assignedTeam = team;
+    if (team === 'SPECTATOR') {
+      // Spočítej hráče v týmech A a B
+      const teamCounts = await prisma.roomPlayer.groupBy({
+        by: ['team'],
+        where: {
+          roomId: room.id,
+          isConnected: true,
+          team: {
+            in: ['A', 'B'],
+          },
+        },
+        _count: true,
+      });
+
+      const teamACount = teamCounts.find(t => t.team === 'A')?._count || 0;
+      const teamBCount = teamCounts.find(t => t.team === 'B')?._count || 0;
+
+      // Přiřaď do týmu s menším počtem hráčů
+      assignedTeam = teamACount <= teamBCount ? 'A' : 'B';
     }
 
     // Přidej hráče do místnosti
@@ -258,7 +330,7 @@ export const joinRoom = async (
         roomId: room.id,
         userId,
         playerName,
-        team,
+        team: assignedTeam,
         isConnected: true,
       },
       select: {
@@ -266,6 +338,7 @@ export const joinRoom = async (
         playerName: true,
         team: true,
         isConnected: true,
+        isReady: true,
         joinedAt: true,
         user: {
           select: {
@@ -279,12 +352,13 @@ export const joinRoom = async (
 
     logger.info(`Player ${playerName} joined room ${roomCode}`);
 
-    return player;
+    return { player, isNew: true };
   } catch (error) {
     if (error instanceof AppError) {
       throw error;
     }
     logger.error('Error joining room:', error);
+    console.error('Detailed error joining room:', error);
     throw new AppError('Failed to join room', 500, 'DATABASE_ERROR');
   }
 };
@@ -415,7 +489,31 @@ export const startGame = async (roomCode: string, userId?: string) => {
       },
     });
 
-    logger.info(`Game started in room ${roomCode}`);
+    logger.info(`Game started in room ${roomCode} via HTTP API`);
+
+    // Emit Socket.io events to start the game
+    // Import dynamicky, aby se předešlo circular dependencies
+    const { getIO } = await import('../socket');
+    const { sendNextQuestion } = await import('../socket/gameHandlers');
+    const io = getIO();
+
+    if (io) {
+      // Inicializovat game state
+      const gameState = {
+        currentRound: 0,
+        scores: { teamA: 0, teamB: 0 },
+      };
+
+      // Emit game-started event
+      io.to(roomCode).emit('game-started', { gameState });
+      logger.info(`Emitted game-started event to room ${roomCode}`);
+
+      // Send first question for quiz games
+      await sendNextQuestion(roomCode, io);
+      logger.info(`Sent first question to room ${roomCode}`);
+    } else {
+      logger.warn(`Socket.io instance not available for room ${roomCode}`);
+    }
 
     return updatedRoom;
   } catch (error) {
@@ -549,5 +647,177 @@ export const changePlayerTeam = async (
     }
     logger.error('Error changing player team:', error);
     throw new AppError('Failed to change team', 500, 'DATABASE_ERROR');
+  }
+};
+
+/**
+ * Nastaví připravenost hráče
+ */
+export const setPlayerReady = async (
+  roomCode: string,
+  playerId: string,
+  isReady: boolean
+) => {
+  try {
+    const room = await prisma.gameRoom.findUnique({
+      where: { roomCode },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    if (!room) {
+      throw new AppError('Room not found', 404, 'ROOM_NOT_FOUND');
+    }
+
+    if (room.status !== 'WAITING') {
+      throw new AppError('Cannot change ready status after game has started', 400, 'GAME_ALREADY_STARTED');
+    }
+
+    const player = await prisma.roomPlayer.update({
+      where: { id: playerId },
+      data: { isReady },
+      select: {
+        id: true,
+        playerName: true,
+        isReady: true,
+        team: true,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    logger.info(`Player ${playerId} ready status changed to ${isReady} in room ${roomCode}`);
+
+    // Broadcast ready status change via WebSocket
+    const { io } = await import('../server');
+    io.to(roomCode).emit('player:ready', playerId, isReady);
+
+    return player;
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+    logger.error('Error setting player ready status:', error);
+    throw new AppError('Failed to set ready status', 500, 'DATABASE_ERROR');
+  }
+};
+
+/**
+ * Přenese hostitele na dalšího hráče v pořadí (nejstarší podle joinedAt)
+ * Vrátí null pokud není další hráč (místnost by měla být smazána)
+ */
+export const transferHost = async (roomId: string, currentHostUserId: string) => {
+  try {
+    // Najít dalšího hráče v pořadí (nejstarší připojený hráč, který není host)
+    const nextHost = await prisma.roomPlayer.findFirst({
+      where: {
+        roomId,
+        userId: { not: currentHostUserId },
+        isConnected: true,
+      },
+      orderBy: {
+        joinedAt: 'asc', // Nejstarší hráč
+      },
+      select: {
+        userId: true,
+        playerName: true,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    if (!nextHost || !nextHost.userId) {
+      // Žádný další hráč s userId není k dispozici
+      logger.info(`No eligible player to transfer host role in room ${roomId}`);
+      return null;
+    }
+
+    // Přenes hostitele na nového hráče
+    const updatedRoom = await prisma.gameRoom.update({
+      where: { id: roomId },
+      data: { hostId: nextHost.userId },
+      select: {
+        id: true,
+        roomCode: true,
+        hostId: true,
+        host: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    logger.info(
+      `Host transferred from ${currentHostUserId} to ${nextHost.userId} in room ${roomId}`
+    );
+
+    return {
+      newHost: nextHost,
+      room: updatedRoom,
+    };
+  } catch (error) {
+    logger.error('Error transferring host:', error);
+    throw new AppError('Failed to transfer host', 500, 'DATABASE_ERROR');
+  }
+};
+
+/**
+ * Získá metadata místnosti bez citlivých dat
+ * Používá se pro kontrolu před vstupem do místnosti
+ */
+export const getRoomMetadata = async (roomCode: string) => {
+  try {
+    const room = await prisma.gameRoom.findUnique({
+      where: { roomCode },
+      select: {
+        id: true,
+        roomCode: true,
+        roomName: true,
+        isPrivate: true,
+        passwordHash: true,
+        status: true,
+        game: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+      },
+    });
+
+    if (!room) {
+      throw new AppError('Room not found', 404, 'ROOM_NOT_FOUND');
+    }
+
+    return {
+      roomCode: room.roomCode,
+      roomName: room.roomName,
+      isPrivate: room.isPrivate,
+      requiresPassword: !!room.passwordHash,
+      status: room.status,
+      gameName: room.game.name,
+    };
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+    logger.error('Error fetching room metadata:', error);
+    throw new AppError('Failed to fetch room metadata', 500, 'DATABASE_ERROR');
   }
 };

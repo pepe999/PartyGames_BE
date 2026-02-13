@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import {
   createGameRoom,
   getRoom,
@@ -7,8 +8,21 @@ import {
   startGameInRoom,
   changeTeam,
   getActiveRooms,
+  getRoomPlayers,
+  setReady,
+  leaveGameRoom,
+  getRoomMetadataController,
 } from '../controllers/roomsController';
-import { optionalAuth } from '../middleware/auth';
+import { optionalAuth, requireAuth } from '../middleware/auth';
+
+// Rate limiter pro pokusy o zadání hesla
+const passwordVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minut
+  max: 5, // 5 pokusů za 15 minut
+  message: 'Příliš mnoho pokusů o zadání hesla, zkuste to prosím později',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const router = Router();
 
@@ -152,6 +166,99 @@ router.get('/:roomCode', getRoom);
 
 /**
  * @swagger
+ * /api/rooms/{roomCode}/metadata:
+ *   get:
+ *     tags: [Rooms]
+ *     summary: Metadata místnosti
+ *     description: Získá základní informace o místnosti (bez citlivých dat) - používá se pro kontrolu před vstupem
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[A-Z0-9]{4}-[A-Z0-9]{4}$'
+ *         description: Kód místnosti
+ *     responses:
+ *       200:
+ *         description: Metadata místnosti
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     metadata:
+ *                       type: object
+ *                       properties:
+ *                         roomCode:
+ *                           type: string
+ *                         roomName:
+ *                           type: string
+ *                         isPrivate:
+ *                           type: boolean
+ *                         requiresPassword:
+ *                           type: boolean
+ *                         status:
+ *                           type: string
+ *                         gameName:
+ *                           type: string
+ *       404:
+ *         description: Místnost nebyla nalezena
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.get('/:roomCode/metadata', getRoomMetadataController);
+
+/**
+ * @swagger
+ * /api/rooms/{roomCode}/players:
+ *   get:
+ *     tags: [Rooms]
+ *     summary: Seznam hráčů v místnosti
+ *     description: Získá seznam všech hráčů v místnosti
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[A-Z0-9]{4}-[A-Z0-9]{4}$'
+ *         description: Kód místnosti
+ *     responses:
+ *       200:
+ *         description: Seznam hráčů
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     players:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/RoomPlayer'
+ *       404:
+ *         description: Místnost nebyla nalezena
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.get('/:roomCode/players', getRoomPlayers);
+
+/**
+ * @swagger
  * /api/rooms/{roomCode}/join:
  *   post:
  *     tags: [Rooms]
@@ -210,7 +317,7 @@ router.get('/:roomCode', getRoom);
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-router.post('/:roomCode/join', optionalAuth, joinGameRoom);
+router.post('/:roomCode/join', passwordVerifyLimiter, optionalAuth, joinGameRoom);
 
 /**
  * @swagger
@@ -394,5 +501,112 @@ router.post('/:roomCode/start', optionalAuth, startGameInRoom);
  *               $ref: '#/components/schemas/Error'
  */
 router.post('/:roomCode/players/:playerId/team', changeTeam);
+
+/**
+ * @swagger
+ * /api/rooms/{roomCode}/players/{playerId}/ready:
+ *   post:
+ *     tags: [Rooms]
+ *     summary: Nastavení připravenosti hráče
+ *     description: Nastaví či zruší připravenost hráče
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Kód místnosti
+ *       - in: path
+ *         name: playerId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: ID hráče
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - isReady
+ *             properties:
+ *               isReady:
+ *                 type: boolean
+ *                 description: Připraven (true) nebo ne (false)
+ *     responses:
+ *       200:
+ *         description: Připravenost změněna
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     player:
+ *                       $ref: '#/components/schemas/RoomPlayer'
+ *       400:
+ *         description: Hra už běží, nelze měnit připravenost
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Místnost nebo hráč nebyli nalezeni
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/:roomCode/players/:playerId/ready', setReady);
+
+/**
+ * @swagger
+ * /api/rooms/{roomCode}/leave:
+ *   post:
+ *     tags: [Rooms]
+ *     summary: Opuštění místnosti
+ *     description: Hráč opouští místnost. Pokud je host, přenese se role na dalšího hráče.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: roomCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[A-Z0-9]{4}-[A-Z0-9]{4}$'
+ *         description: Kód místnosti
+ *     responses:
+ *       200:
+ *         description: Místnost úspěšně opuštěna
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       401:
+ *         description: Uživatel není přihlášen
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Místnost nebo hráč nebyl nalezen
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/:roomCode/leave', requireAuth, leaveGameRoom);
 
 export default router;

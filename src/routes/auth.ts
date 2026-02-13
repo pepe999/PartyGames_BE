@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { googleLogin, getMe, logout, refreshToken } from '../controllers/authController';
+import { googleLogin, getMe, logout, refreshToken, devLogin } from '../controllers/authController';
 import { requireAuth } from '../middleware/auth';
 
 const router = Router();
@@ -142,5 +142,49 @@ router.post('/logout', logout);
  *               $ref: '#/components/schemas/Error'
  */
 router.post('/refresh', requireAuth, refreshToken);
+
+/**
+ * @swagger
+ * /api/auth/dev-login:
+ *   post:
+ *     tags: [Auth]
+ *     summary: DEV ONLY - Testovací přihlášení
+ *     description: Vytvoří nebo přihlásí testovacího uživatele (pouze pro development)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Jméno testovacího uživatele
+ *               avatar:
+ *                 type: string
+ *                 description: URL avataru (volitelné)
+ *     responses:
+ *       200:
+ *         description: Úspěšné přihlášení
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *                     token:
+ *                       type: string
+ */
+if (process.env.NODE_ENV === 'development') {
+  router.post('/dev-login', devLogin);
+}
 
 export default router;

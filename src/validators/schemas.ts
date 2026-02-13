@@ -33,7 +33,7 @@ export const gameContentSchema = z.object({
   gameId: z.string().uuid('Invalid game ID'),
   category: z.string().optional(),
   difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']).optional(),
-  type: z.enum(['QUESTION', 'ACTIVITY', 'PROVERB', 'EMOJI_MOVIE']).optional(),
+  type: z.enum(['QUESTION', 'PANTOMIMA', 'PROVERB', 'EMOJI_MOVIE']).optional(),
   limit: z.string().optional().transform((val) => val ? parseInt(val, 10) : undefined),
 });
 
@@ -51,6 +51,10 @@ export const createRoomSchema = z.object({
     teamMode: z.boolean().default(true),
     maxPlayers: z.number().int().min(2).max(20).optional(),
   }),
+  // Pole pro soukromé místnosti
+  isPrivate: z.boolean().default(true),
+  password: z.string().min(4, 'Password must be at least 4 characters').max(50, 'Password must be at most 50 characters').optional(),
+  roomName: z.string().min(2, 'Room name must be at least 2 characters').max(100, 'Room name must be at most 100 characters').optional(),
 });
 
 export const roomCodeSchema = z.object({
@@ -60,6 +64,7 @@ export const roomCodeSchema = z.object({
 export const joinRoomSchema = z.object({
   playerName: z.string().min(2, 'Player name must be at least 2 characters').max(20, 'Player name must be at most 20 characters'),
   team: z.enum(['A', 'B', 'SPECTATOR']).default('SPECTATOR'),
+  password: z.string().optional(), // Pro soukromé místnosti s heslem
 });
 
 export const updateRoomSettingsSchema = z.object({
@@ -89,14 +94,14 @@ export const submitAnswerSchema = z.object({
 
 export const createContentSchema = z.object({
   gameId: z.string().uuid('Invalid game ID'),
-  type: z.enum(['QUESTION', 'ACTIVITY', 'PROVERB', 'EMOJI_MOVIE']),
+  type: z.enum(['QUESTION', 'PANTOMIMA', 'PROVERB', 'EMOJI_MOVIE']),
   content: z.object({
     // Pro QUESTION
     question: z.string().optional(),
     options: z.array(z.string()).optional(),
     correctAnswer: z.number().optional(),
 
-    // Pro ACTIVITY
+    // Pro PANTOMIMA
     word: z.string().optional(),
     forbiddenWords: z.array(z.string()).optional(),
 

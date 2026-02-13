@@ -4,13 +4,14 @@ import { logger } from '../utils/logger';
 import { GameState } from '../types';
 
 // In-memory game states (pro real-time hry)
-const gameStates = new Map<string, GameState>();
+export const gameStates = new Map<string, GameState>();
 
 export function handleGameEvents(socket: Socket, io: Server): void {
   // Spuštění hry
   socket.on('start-game', async (data) => {
     try {
       const { roomCode } = data;
+      logger.info(`Received start-game event for room ${roomCode} from socket ${socket.id}`);
 
       const room = await prisma.gameRoom.findUnique({
         where: { roomCode },
@@ -18,9 +19,12 @@ export function handleGameEvents(socket: Socket, io: Server): void {
       });
 
       if (!room) {
+        logger.error(`Room ${roomCode} not found`);
         socket.emit('error', { message: 'Room not found', code: 'ROOM_NOT_FOUND' });
         return;
       }
+
+      logger.info(`Room ${roomCode} found, updating status to PLAYING`);
 
       // Aktualizovat status místnosti
       await prisma.gameRoom.update({
@@ -39,10 +43,12 @@ export function handleGameEvents(socket: Socket, io: Server): void {
 
       gameStates.set(roomCode, gameState);
 
+      logger.info(`Emitting game-started event to room ${roomCode}`);
       // Notify všechny hráče
       io.to(roomCode).emit('game-started', { gameState });
 
       // Odeslat první otázku (pro kvízové hry)
+      logger.info(`Sending first question to room ${roomCode}`);
       await sendNextQuestion(roomCode, io);
 
       logger.info(`Game started in room ${roomCode}`);
@@ -106,71 +112,129 @@ export function handleGameEvents(socket: Socket, io: Server): void {
   });
 }
 
-async function sendNextQuestion(roomCode: string, io: Server): Promise<void> {
-  const gameState = gameStates.get(roomCode);
-  if (!gameState) return;
+export async function sendNextQuestion(roomCode: string, io: Server): Promise<void> {
+  logger.info(`sendNextQuestion called for room ${roomCode}`);
+  let gameState = gameStates.get(roomCode);
+
+  // Pokud game state neexistuje, vytvoř ho
+  if (!gameState) {
+    logger.info(`Creating new game state for room ${roomCode}`);
+    gameState = {
+      currentRound: 0,
+      scores: { teamA: 0, teamB: 0 },
+    };
+    gameStates.set(roomCode, gameState);
+  }
 
   const room = await prisma.gameRoom.findUnique({
     where: { roomCode },
     include: { game: true },
   });
 
-  if (!room) return;
+  if (!room) {
+    logger.error(`Room ${roomCode} not found in sendNextQuestion`);
+    return;
+  }
 
   const settings = room.settings as any;
   const maxRounds = settings.rounds || 10;
 
+  logger.info(`Current round: ${gameState.currentRound}, Max rounds: ${maxRounds}`);
+
   // Zkontrolovat, jestli hra neskončila
   if (gameState.currentRound >= maxRounds) {
+    logger.info(`Game ended: currentRound (${gameState.currentRound}) >= maxRounds (${maxRounds})`);
     await endGame(roomCode, io);
     return;
   }
 
   gameState.currentRound++;
+  logger.info(`Round incremented to: ${gameState.currentRound}`);
 
-  // Načíst náhodnou otázku
-  const questions = await prisma.gameContent.findMany({
+  // Určit typ obsahu podle názvu hry
+  const gameSlug = room.game.slug;
+  const isPantomima = gameSlug === 'pantomima';
+  const contentType = isPantomima ? 'PANTOMIMA' : 'QUESTION';
+
+  logger.info(`Game: ${room.game.name} (${gameSlug}), Content type: ${contentType}`);
+
+  // Načíst náhodný obsah (otázku nebo slovo)
+  const content = await prisma.gameContent.findMany({
     where: {
       gameId: room.gameId,
-      type: 'QUESTION',
+      type: contentType,
       status: 'APPROVED',
     },
     take: 100,
   });
 
-  if (questions.length === 0) {
+  logger.info(`Found ${content.length} ${contentType} items for game ${room.gameId}`);
+
+  if (content.length === 0) {
+    logger.error(`No ${contentType} found for game ${room.gameId}, ending game`);
     await endGame(roomCode, io);
     return;
   }
 
-  const randomQuestion = questions[Math.floor(Math.random() * questions.length)];
-  gameState.currentQuestion = randomQuestion;
+  const randomContent = content[Math.floor(Math.random() * content.length)];
+  gameState.currentQuestion = randomContent;
   gameState.roundStartTime = Date.now();
 
-  const timeLimit = settings.timePerQuestion || 30;
+  const timeLimit = settings.timePerQuestion || 60;
 
-  // Odeslat otázku (bez správné odpovědi!)
-  const questionData = {
-    ...randomQuestion,
-    content: {
-      ...(randomQuestion.content as Record<string, unknown>),
-      correctAnswer: undefined, // Skrýt správnou odpověď
-    },
-  };
+  if (isPantomima) {
+    // Pro pantomimu pošli slovo k předvádění
+    const wordData = {
+      id: randomContent.id,
+      word: (randomContent.content as any).word,
+      category: (randomContent.content as any).category,
+      difficulty: randomContent.difficulty,
+    };
 
-  io.to(roomCode).emit('question-show', {
-    question: questionData,
-    timeLimit,
-  });
+    logger.info(`Sending pantomima word to room ${roomCode}:`, wordData);
 
-  // Po timeoutu zobrazit výsledek
-  setTimeout(() => {
-    io.to(roomCode).emit('round-result', {
-      correctAnswer: (randomQuestion.content as any).correctAnswer,
-      explanation: (randomQuestion.content as any).explanation,
-      scores: gameState.scores,
+    io.to(roomCode).emit('word-show', {
+      word: wordData,
+      timeLimit,
     });
-  }, timeLimit * 1000 + 2000);
+
+    // Po timeoutu pokračuj dalším kolem
+    setTimeout(() => {
+      io.to(roomCode).emit('round-end', {
+        word: wordData.word,
+        scores: gameState.scores,
+      });
+    }, timeLimit * 1000 + 2000);
+  } else {
+    // Pro kvíz pošli otázku (bez správné odpovědi!)
+    const questionData = {
+      ...randomContent,
+      content: {
+        ...(randomContent.content as Record<string, unknown>),
+        correctAnswer: undefined, // Skrýt správnou odpověď
+      },
+    };
+
+    logger.info(`Sending question to room ${roomCode}:`, {
+      questionId: randomContent.id,
+      content: questionData.content,
+      timeLimit,
+    });
+
+    io.to(roomCode).emit('question-show', {
+      question: questionData,
+      timeLimit,
+    });
+
+    // Po timeoutu zobrazit výsledek
+    setTimeout(() => {
+      io.to(roomCode).emit('round-result', {
+        correctAnswer: (randomContent.content as any).correctAnswer,
+        explanation: (randomContent.content as any).explanation,
+        scores: gameState.scores,
+      });
+    }, timeLimit * 1000 + 2000);
+  }
 }
 
 async function endGame(roomCode: string, io: Server): Promise<void> {

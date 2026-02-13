@@ -91,15 +91,21 @@ model GameContent {
 // ============================================
 
 model GameRoom {
-  id         String     @id @default(uuid())
-  roomCode   String     @unique // 8 znaků, např. ABCD-1234
-  gameId     String
-  hostId     String?    // NULL pro anonymní hosta
-  status     RoomStatus @default(WAITING)
-  settings   Json       // JSONB - nastavení hry (kola, čas, kategorie)
-  createdAt  DateTime   @default(now())
-  startedAt  DateTime?
-  finishedAt DateTime?
+  id           String     @id @default(uuid())
+  roomCode     String     @unique // 8 znaků, např. ABCD-1234
+  gameId       String
+  hostId       String?    // NULL pro anonymní hosta
+  status       RoomStatus @default(WAITING)
+  settings     Json       // JSONB - nastavení hry (kola, čas, kategorie)
+
+  // Pole pro soukromé místnosti
+  isPrivate    Boolean    @default(true)   // Defaultně soukromá
+  passwordHash String?                      // NULL = bez hesla
+  roomName     String?                      // Volitelný název
+
+  createdAt    DateTime   @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
 
   // Relace
   game    Game         @relation(fields: [gameId], references: [id], onDelete: Cascade)
@@ -108,6 +114,7 @@ model GameRoom {
 
   @@index([roomCode])
   @@index([status])
+  @@index([isPrivate])  // Nový index pro rychlé filtrování veřejných místností
   @@map("game_rooms")
 }
 
@@ -117,7 +124,9 @@ model RoomPlayer {
   userId      String?  // NULL pro anonymní hráče
   playerName  String
   team        TeamType @default(SPECTATOR)
+  score       Int      @default(0)
   isConnected Boolean  @default(true)
+  isReady     Boolean  @default(false) @map("is_ready")
   joinedAt    DateTime @default(now())
 
   // Relace
@@ -174,7 +183,7 @@ enum GameType {
 
 enum ContentType {
   QUESTION      // Otázka s možnostmi odpovědí
-  ACTIVITY      // Activity slovo/fráze
+  PANTOMIMA     // Pantomima slovo/fráze
   PROVERB       // Přísloví s obrázkem
   EMOJI_MOVIE   // Film reprezentovaný emoji
 }
