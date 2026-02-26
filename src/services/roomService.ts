@@ -270,37 +270,6 @@ export const joinRoom = async (
       throw new AppError('Room is full', 400, 'ROOM_FULL');
     }
 
-    // Zkontroluj, zda hráč už není v místnosti (podle userId)
-    if (userId) {
-      const existingPlayer = await prisma.roomPlayer.findFirst({
-        where: {
-          roomId: room.id,
-          userId,
-          isConnected: true,
-        },
-        select: {
-          id: true,
-          playerName: true,
-          team: true,
-          isConnected: true,
-          joinedAt: true,
-          isReady: true,
-          user: {
-            select: {
-              id: true,
-              name: true,
-              avatar: true,
-            },
-          },
-        },
-      });
-
-      if (existingPlayer) {
-        // Hráč už je v místnosti, vrať ho
-        return { player: existingPlayer, isNew: false };
-      }
-    }
-
     // Automaticky rozděl hráče do týmů pokud team není specifikován
     let assignedTeam = team;
     if (team === 'SPECTATOR') {
@@ -324,11 +293,57 @@ export const joinRoom = async (
       assignedTeam = teamACount <= teamBCount ? 'A' : 'B';
     }
 
-    // Přidej hráče do místnosti
+    // Pro uživatele s userId použij upsert (prevence duplikátů při race conditions)
+    if (userId) {
+      const player = await prisma.roomPlayer.upsert({
+        where: {
+          roomId_userId_unique: {
+            roomId: room.id,
+            userId,
+          },
+        },
+        update: {
+          isConnected: true,
+          // Neměníme tým ani jméno při reconnect
+        },
+        create: {
+          roomId: room.id,
+          userId,
+          playerName,
+          team: assignedTeam,
+          isConnected: true,
+        },
+        select: {
+          id: true,
+          playerName: true,
+          team: true,
+          isConnected: true,
+          isReady: true,
+          joinedAt: true,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              avatar: true,
+            },
+          },
+        },
+      });
+
+      // Zjisti, jestli byl hráč vytvořen nebo pouze aktualizován
+      // Pokud joinedAt je nedávné (< 1s), byl právě vytvořen
+      const isNew = Date.now() - player.joinedAt.getTime() < 1000;
+
+      logger.info(`Player ${playerName} ${isNew ? 'joined' : 'reconnected to'} room ${roomCode}`);
+
+      return { player, isNew };
+    }
+
+    // Pro anonymní hráče (bez userId) vždy vytvoř nového
     const player = await prisma.roomPlayer.create({
       data: {
         roomId: room.id,
-        userId,
+        userId: null,
         playerName,
         team: assignedTeam,
         isConnected: true,
@@ -350,7 +365,7 @@ export const joinRoom = async (
       },
     });
 
-    logger.info(`Player ${playerName} joined room ${roomCode}`);
+    logger.info(`Anonymous player ${playerName} joined room ${roomCode}`);
 
     return { player, isNew: true };
   } catch (error) {
@@ -507,6 +522,9 @@ export const startGame = async (roomCode: string, userId?: string) => {
       // Emit game-started event
       io.to(roomCode).emit('game-started', { gameState });
       logger.info(`Emitted game-started event to room ${roomCode}`);
+
+      // Wait for clients to navigate to Game page and set up socket listeners
+      await new Promise(resolve => setTimeout(resolve, 1500));
 
       // Send first question for quiz games
       await sendNextQuestion(roomCode, io);

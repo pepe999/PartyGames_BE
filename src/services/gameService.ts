@@ -385,9 +385,9 @@ const validateContentByType = (type: ContentType, content: any) => {
       }
       break;
 
-    case 'ACTIVITY':
+    case 'PANTOMIMA':
       if (!content.word || typeof content.word !== 'string') {
-        throw new AppError('Invalid activity content: missing word', 400, 'INVALID_CONTENT');
+        throw new AppError('Invalid pantomima content: missing word', 400, 'INVALID_CONTENT');
       }
       break;
 

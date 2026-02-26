@@ -101,6 +101,50 @@ export function handleGameEvents(socket: Socket, io: Server): void {
     }
   });
 
+  // Získání aktuálního stavu hry (pro klienty, kteří se připojili pozdě)
+  socket.on('game:get-state', async (roomCode: string) => {
+    try {
+      logger.info(`Client ${socket.id} requesting game state for room ${roomCode}`);
+
+      const gameState = gameStates.get(roomCode);
+      if (!gameState) {
+        logger.warn(`No game state found for room ${roomCode}`);
+        return;
+      }
+
+      // Pro Pantomima hry pošli aktuální slovo
+      if (gameState.currentWord) {
+        const timeElapsed = Math.floor((Date.now() - (gameState.roundStartTime || Date.now())) / 1000);
+        const remainingTime = Math.max(0, (gameState.timeLimit || 60) - timeElapsed);
+
+        logger.info(`Sending current word to client ${socket.id}:`, gameState.currentWord);
+
+        socket.emit('word-show', {
+          word: gameState.currentWord,
+          timeLimit: remainingTime,
+        });
+      }
+      // Pro kvízové hry pošli aktuální otázku
+      else if (gameState.currentQuestion) {
+        const timeElapsed = Math.floor((Date.now() - (gameState.roundStartTime || Date.now())) / 1000);
+        const remainingTime = Math.max(0, (gameState.timeLimit || 60) - timeElapsed);
+
+        socket.emit('question-show', {
+          question: {
+            ...gameState.currentQuestion,
+            content: {
+              ...(gameState.currentQuestion.content as Record<string, unknown>),
+              correctAnswer: undefined,
+            },
+          },
+          timeLimit: remainingTime,
+        });
+      }
+    } catch (error) {
+      logger.error('Error getting game state:', error);
+    }
+  });
+
   // Další otázka
   socket.on('next-question', async (data) => {
     try {
@@ -190,6 +234,10 @@ export async function sendNextQuestion(roomCode: string, io: Server): Promise<vo
       category: (randomContent.content as any).category,
       difficulty: randomContent.difficulty,
     };
+
+    // Uložit aktuální slovo do gameState pro pozdější dotazy
+    gameState.currentWord = wordData;
+    gameState.timeLimit = timeLimit;
 
     logger.info(`Sending pantomima word to room ${roomCode}:`, wordData);
 

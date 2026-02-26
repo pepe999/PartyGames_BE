@@ -108,7 +108,7 @@ export const refreshToken = asyncHandler(async (req: AuthRequest, res: Response)
  * DEV ONLY - Testovací přihlášení bez Google OAuth
  */
 export const devLogin = asyncHandler(async (req: AuthRequest, res: Response) => {
-  if (process.env.NODE_ENV !== 'development') {
+  if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') {
     throw new AppError('This endpoint is only available in development', 403, 'FORBIDDEN');
   }
 

@@ -15,13 +15,14 @@ import {
 } from '../controllers/roomsController';
 import { optionalAuth, requireAuth } from '../middleware/auth';
 
-// Rate limiter pro pokusy o zadání hesla
+// Rate limiter pro pokusy o zadání hesla (disabled in test environment)
 const passwordVerifyLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minut
   max: 5, // 5 pokusů za 15 minut
   message: 'Příliš mnoho pokusů o zadání hesla, zkuste to prosím později',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test', // Skip rate limiting in tests
 });
 
 const router = Router();

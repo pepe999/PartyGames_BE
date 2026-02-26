@@ -36,7 +36,7 @@ export const getWord = asyncHandler(async (req: AuthRequest, res: Response) => {
   const gameContent = await prisma.gameContent.findMany({
     where: {
       gameId: room.game.id,
-      type: 'ACTIVITY',
+      type: 'PANTOMIMA',
       status: 'APPROVED',
     },
     take: 100,
@@ -264,7 +264,7 @@ export const endTurn = asyncHandler(async (req: AuthRequest, res: Response) => {
   const gameContent = await prisma.gameContent.findMany({
     where: {
       gameId: room.game.id,
-      type: 'ACTIVITY',
+      type: 'PANTOMIMA',
       status: 'APPROVED',
     },
     take: 100,

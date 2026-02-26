@@ -458,7 +458,7 @@ const startFirstTurn = async (roomCode: string) => {
     const gameContent = await prisma.gameContent.findMany({
       where: {
         gameId: room.game.id,
-        type: 'ACTIVITY',
+        type: 'PANTOMIMA',
         status: 'APPROVED',
       },
       take: 100,

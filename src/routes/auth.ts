@@ -183,7 +183,7 @@ router.post('/refresh', requireAuth, refreshToken);
  *                     token:
  *                       type: string
  */
-if (process.env.NODE_ENV === 'development') {
+if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
   router.post('/dev-login', devLogin);
 }
 
